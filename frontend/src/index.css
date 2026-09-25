@@ -583,6 +583,16 @@ table.data tr:hover td { background: #f8f9fa; }
   margin-bottom: 16px;
 }
 
+.note {
+  background: var(--blue-soft);
+  border: 1px solid #d2e3fc;
+  color: #174ea6;
+  padding: 10px 14px;
+  border-radius: 4px;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
 .empty {
   padding: 28px;
   text-align: center;

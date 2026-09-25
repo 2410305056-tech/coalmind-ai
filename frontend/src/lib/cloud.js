@@ -17,6 +17,7 @@ async function rest(table, params = '') {
     headers: {
       apikey: SB_ANON,
       Authorization: `Bearer ${SB_ANON}`,
+      Accept: 'application/json',
     },
   })
   if (!res.ok) {

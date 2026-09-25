@@ -53,20 +53,17 @@ export default function App() {
   }
 
   const refresh = async () => {
-    try {
-      const [h, d, t, c] = await Promise.all([
-        getJson('/health'),
-        getJson('/api/documents'),
-        getJson('/api/topics'),
-        getJson('/api/conflicts'),
-      ])
-      setHealth(h)
-      setDocuments(Array.isArray(d) ? d : [])
-      setTopics(Array.isArray(t) ? t : [])
-      setConflicts(Array.isArray(c) ? c : [])
-    } catch {
-      setHealth({ status: 'offline', store: '—' })
-    }
+    const [h, d, t, c] = await Promise.allSettled([
+      getJson('/health'),
+      getJson('/api/documents'),
+      getJson('/api/topics'),
+      getJson('/api/conflicts'),
+    ])
+    if (h.status === 'fulfilled') setHealth(h.value)
+    else setHealth({ status: 'offline', store: '—' })
+    if (d.status === 'fulfilled' && Array.isArray(d.value)) setDocuments(d.value)
+    if (t.status === 'fulfilled' && Array.isArray(t.value)) setTopics(t.value)
+    if (c.status === 'fulfilled' && Array.isArray(c.value)) setConflicts(c.value)
   }
 
   useEffect(() => { refresh() }, [])
@@ -74,6 +71,11 @@ export default function App() {
   const onUpload = async (e) => {
     const file = e.target.files?.[0]
     if (!file) return
+    if (!pythonApiEnabled()) {
+      notify('Read-only demo', 'Start the local API to ingest files.')
+      e.target.value = ''
+      return
+    }
     setUploading(true)
     setUploadNote(`Reading ${file.name}…`)
     const body = new FormData()
@@ -117,6 +119,10 @@ export default function App() {
   }
 
   const downloadReport = async () => {
+    if (!pythonApiEnabled()) {
+      notify('Read-only demo', 'PDF briefs need the local Python API.')
+      return
+    }
     setReporting(true)
     try {
       const res = await fetch(apiUrl('/api/report/generate'), {
@@ -191,9 +197,9 @@ export default function App() {
           </div>
         )}
         {online && health.python_ok === false && (
-          <div className="offline">
-            Live demo via Supabase (free). Ask, library, and conflicts work.
-            Upload and PDF briefs need the local Python API.
+          <div className="note">
+            Connected to Supabase. Ask, documents, and conflicts are live.
+            File upload and PDF briefs run only with the local API.
           </div>
         )}
 

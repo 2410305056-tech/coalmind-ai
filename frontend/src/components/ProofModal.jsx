@@ -1,9 +1,10 @@
-import { apiUrl } from '../lib/api'
+import { pythonApiEnabled, apiUrl } from '../lib/api'
 
 export default function ProofModal({ isOpen, onClose, source, documentId }) {
   if (!isOpen || !source) return null
   const page = source.page_number || 1
-  const bbox = source.bounding_box || [72, 120, 520, 200]
+  const raw = source.bounding_box
+  const bbox = Array.isArray(raw) && raw.length >= 4 ? raw : [72, 120, 520, 200]
   const [x0, y0, x1, y1] = bbox
   const nw = 612
   const nh = 792
@@ -11,7 +12,8 @@ export default function ProofModal({ isOpen, onClose, source, documentId }) {
   const top = Math.max(4, Math.min(90, (y0 / nh) * 100))
   const width = Math.max(12, Math.min(96 - left, ((x1 - x0) / nw) * 100))
   const height = Math.max(6, Math.min(40, ((y1 - y0) / nh) * 100))
-  const src = documentId ? apiUrl(`/api/documents/${documentId}/file`) : ''
+  const canFile = pythonApiEnabled() && documentId
+  const src = canFile ? apiUrl(`/api/documents/${documentId}/file`) : ''
 
   return (
     <div className="modal-back" onClick={onClose} role="presentation">
@@ -24,17 +26,20 @@ export default function ProofModal({ isOpen, onClose, source, documentId }) {
           <button className="btn btn-ghost" type="button" onClick={onClose}>Close</button>
         </div>
         <div className="modal-body">
-          <div className="pdf-frame">
-            {src ? (
+          {src ? (
+            <div className="pdf-frame">
               <iframe title="Source document" src={src} />
-            ) : (
-              <div className="empty">No file id for this citation.</div>
-            )}
-            <div
-              className="hl"
-              style={{ left: `${left}%`, top: `${top}%`, width: `${width}%`, height: `${height}%` }}
-            />
-          </div>
+              <div
+                className="hl"
+                style={{ left: `${left}%`, top: `${top}%`, width: `${width}%`, height: `${height}%` }}
+              />
+            </div>
+          ) : (
+            <div className="empty">
+              Citation: {source.document_name}, page {page}.
+              Open the local API to preview the file.
+            </div>
+          )}
         </div>
       </div>
     </div>
