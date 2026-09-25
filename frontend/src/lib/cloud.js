@@ -1,3 +1,6 @@
+import { expandQuery } from './followup'
+import { buildMineSnapshot } from './mines'
+
 const SB_URL = String(import.meta.env.VITE_SUPABASE_URL || '').replace(/\/$/, '')
 const SB_ANON = String(import.meta.env.VITE_SUPABASE_ANON_KEY || '')
 const GEMINI_KEY = String(import.meta.env.VITE_GEMINI_API_KEY || '')
@@ -78,14 +81,25 @@ function intentOf(query) {
   return SQL_TRIGGERS.some((w) => q.includes(w)) ? 'sql' : 'rag'
 }
 
-export async function cloudQuery(query) {
-  const intent = intentOf(query)
+export async function cloudMines() {
+  const rows = await rest('metrics', '?select=*')
+  return buildMineSnapshot(rows)
+}
+
+export async function cloudQuery(query, history = []) {
+  const expanded = expandQuery(query, history)
+  const intent = intentOf(expanded)
   if (intent === 'sql') {
     const rows = await rest('metrics', '?select=*&order=year.asc')
-    const q = query.toLowerCase()
+    const q = expanded.toLowerCase()
     const filtered = rows.filter((r) => {
       const blob = `${r.mine || ''} ${r.subsidiary || ''} ${r.parameter || ''} ${r.year || ''}`.toLowerCase()
       if (q.includes('gevra') && !blob.includes('gevra')) return false
+      if (q.includes('kusmunda') && !blob.includes('kusmunda')) return false
+      if (q.includes('dipka') && !blob.includes('dipka')) return false
+      for (const yr of ['2021-22', '2022-23', '2023-24', '2024-25']) {
+        if (q.includes(yr) && !blob.includes(yr)) return false
+      }
       if (q.includes('obr') || q.includes('overburden')) {
         return (r.parameter || '').toLowerCase().includes('overburden') || (r.parameter || '').toLowerCase().includes('obr')
       }
@@ -110,7 +124,7 @@ export async function cloudQuery(query) {
           .map((r) => `- ${r.mine || 'Mine'} (${r.year || 'FY'}): ${r.value} ${r.unit || 'MT'} — ${r.source || 'archive'}`)
           .join('\n')
       : 'No metric rows in the archive yet.'
-    const llm = await geminiAnswer(query, JSON.stringify(facts, null, 2))
+    const llm = await geminiAnswer(expanded, JSON.stringify(facts, null, 2))
     return {
       intent: 'sql',
       answer: llm || fallback,
@@ -134,7 +148,7 @@ export async function cloudQuery(query) {
     'document_chunks',
     '?select=document_name,page_number,text,bounding_box'
   )
-  const words = query.toLowerCase().split(/\W+/).filter((w) => w.length > 3)
+  const words = expanded.toLowerCase().split(/\W+/).filter((w) => w.length > 3)
   const scored = chunks.map((c) => {
     const text = String(c.text || '').toLowerCase()
     const score = words.reduce((n, w) => n + (text.includes(w) ? 1 : 0), 0)
@@ -152,7 +166,7 @@ export async function cloudQuery(query) {
   const fallback = pick
     ? `CoalMind AI (grounded on the archive):\n\nFrom **${pick.document_name}** (page ${pick.page_number}):\n\n> ${quote}`
     : 'The archive has no chunks yet.'
-  const llm = await geminiAnswer(query, JSON.stringify(excerpts, null, 2))
+  const llm = await geminiAnswer(expanded, JSON.stringify(excerpts, null, 2))
   return {
     intent: 'rag',
     answer: llm || fallback,
@@ -199,5 +213,6 @@ export async function cloudGet(path) {
   if (path.startsWith('/api/documents')) return cloudDocuments()
   if (path.startsWith('/api/topics')) return cloudTopics()
   if (path.startsWith('/api/conflicts')) return cloudConflicts()
+  if (path.startsWith('/api/mines')) return cloudMines()
   throw new Error(`No cloud route for ${path}`)
 }

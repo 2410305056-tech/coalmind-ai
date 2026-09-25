@@ -5,6 +5,7 @@ import httpx
 
 from backend.config import GEMINI_API_KEY, GROQ_API_KEY
 from backend.engine.embedding import embedder
+from backend.engine.followup import expand_query
 from backend.store.base import BaseStore
 
 SYSTEM = (
@@ -45,11 +46,19 @@ def classify_query_intent(query: str) -> str:
     return "sql" if any(t in q_low for t in sql_triggers) else "rag"
 
 
-async def process_query(query: str, store: BaseStore) -> Dict[str, Any]:
-    intent = classify_query_intent(query)
+async def process_query(
+    query: str,
+    store: BaseStore,
+    history: Optional[List[Dict[str, str]]] = None,
+) -> Dict[str, Any]:
+    expanded = expand_query(query, history)
+    intent = classify_query_intent(expanded)
     if intent == "sql":
-        return await _handle_sql_intent(query, store)
-    return await _handle_rag_intent(query, store)
+        result = await _handle_sql_intent(expanded, store)
+    else:
+        result = await _handle_rag_intent(expanded, store)
+    result["query"] = expanded
+    return result
 
 
 async def _handle_sql_intent(query: str, store: BaseStore) -> Dict[str, Any]:

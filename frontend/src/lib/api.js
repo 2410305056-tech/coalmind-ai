@@ -53,7 +53,7 @@ export async function postJson(path, body) {
     }
   }
   if (path === '/api/query' && supabaseConfigured()) {
-    return cloudQuery(body.query || '')
+    return cloudQuery(body.query || '', body.history || [])
   }
   throw new Error('This action needs the Python API')
 }

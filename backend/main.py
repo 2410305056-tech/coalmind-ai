@@ -16,6 +16,8 @@ from backend.store.supabase_store import get_store
 from backend.engine.parser import parse_document
 from backend.engine.conflict_detector import scan_and_record_conflicts
 from backend.engine.llm_router import ai_status, process_query
+from backend.engine.mines import mine_snapshot
+from backend.engine.demo_pack import load_sih_sample
 from backend.engine.report_generator import generate_executive_pdf
 from backend.sample_data.seed_generator import ensure_sample_files
 
@@ -25,34 +27,11 @@ store = get_store(STORE_TYPE)
 # Lifespan startup handler for automatic seeding
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Ensure sample files exist
-    pdf_sample, xlsx_sample = ensure_sample_files()
-    
-    # Auto-seed if database is empty
     docs = store.list_documents()
     if not docs:
         print("[CoalMind AI] Seeding initial CMPDI/CIL repository documents...")
-        # Ingest PDF
-        pdf_id = str(uuid.uuid4())
-        dest_pdf = UPLOADS_DIR / pdf_sample.name
-        shutil.copy2(pdf_sample, dest_pdf)
-        store.add_document(pdf_id, pdf_sample.name, "pdf", "completed", str(dest_pdf))
-        chunks, metrics, *_ = parse_document(dest_pdf, pdf_id, pdf_sample.name)
-        store.add_chunks(chunks)
-        store.add_metrics(metrics)
-
-        # Ingest Excel
-        xlsx_id = str(uuid.uuid4())
-        dest_xlsx = UPLOADS_DIR / xlsx_sample.name
-        shutil.copy2(xlsx_sample, dest_xlsx)
-        store.add_document(xlsx_id, xlsx_sample.name, "xlsx", "completed", str(dest_xlsx))
-        chunks_x, metrics_x, *_ = parse_document(dest_xlsx, xlsx_id, xlsx_sample.name)
-        store.add_chunks(chunks_x)
-        store.add_metrics(metrics_x)
-
-        # Scan for cross-source discrepancies
-        scan_and_record_conflicts(store)
-        print(f"[CoalMind AI] Seeding complete! Ingested {len(chunks) + len(chunks_x)} chunks, {len(metrics) + len(metrics_x)} metrics.")
+        info = load_sih_sample(store)
+        print(f"[CoalMind AI] Seeding complete! {info.get('message')}")
 
     yield
     print("[CoalMind AI] Shutdown cleanup.")
@@ -76,12 +55,24 @@ app.add_middleware(
 # ------------------------------------------------------------------------------
 # Request & Response Models
 # ------------------------------------------------------------------------------
+class ChatTurn(BaseModel):
+    role: str
+    content: str
+
 class QueryRequest(BaseModel):
     query: str
+    history: Optional[List[ChatTurn]] = None
 
 class ReportRequest(BaseModel):
     subsidiary: str
     reporting_year: str
+
+class ConflictAction(BaseModel):
+    status: str
+    id: Optional[int] = None
+    mine: Optional[str] = None
+    year: Optional[str] = None
+    parameter: Optional[str] = None
 
 # ------------------------------------------------------------------------------
 # API Endpoints
@@ -230,7 +221,8 @@ async def execute_query(req: QueryRequest):
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="Query string cannot be empty")
     
-    result = await process_query(req.query, store)
+    history = [t.model_dump() for t in (req.history or [])]
+    result = await process_query(req.query, store, history)
     return result
 
 @app.get("/api/topics")
@@ -250,6 +242,31 @@ def get_conflicts():
                         "val2": num, "source2": "str" }
     """
     return store.get_conflicts()
+
+@app.post("/api/conflicts/action")
+def conflict_action(req: ConflictAction):
+    allowed = {"ACCEPTED", "FIELD_CHECK", "IGNORED"}
+    status = (req.status or "").upper()
+    if status not in allowed:
+        raise HTTPException(status_code=400, detail="Status must be ACCEPTED, FIELD_CHECK, or IGNORED")
+    try:
+        return store.update_conflict_status(
+            status,
+            conflict_id=req.id,
+            mine=req.mine,
+            year=req.year,
+            parameter=req.parameter,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Conflict not found")
+
+@app.get("/api/mines")
+def list_mines():
+    return mine_snapshot(store)
+
+@app.post("/api/demo/seed")
+def demo_seed():
+    return load_sih_sample(store)
 
 @app.post("/api/report/generate")
 def generate_report(req: ReportRequest):

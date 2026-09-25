@@ -5,13 +5,18 @@ import {
 import ProofModal from './components/ProofModal'
 import AnalyticsChart from './components/AnalyticsChart'
 import Logo from './components/Logo'
+import BriefingCard from './components/BriefingCard'
+import MineBoard from './components/MineBoard'
 import { apiUrl, getJson, postJson, pythonApiEnabled } from './lib/api'
+import { mergeConflictActions, saveConflictAction } from './lib/conflictsLocal'
 
 const SUGGESTIONS = [
   'Compare coal production between 2022 and 2024',
   'Stripping ratio and overburden removal at Gevra mine',
   'Summarize environmental clearance for Kusmunda and Dipka',
 ]
+
+const FOLLOWUPS = ['Only Gevra', 'Show 2023-24', 'What about Kusmunda', 'Same for OBR']
 
 const SUBS = [
   ['SECL', 'South Eastern Coalfields'],
@@ -42,6 +47,9 @@ export default function App() {
   const [query, setQuery] = useState('')
   const [asking, setAsking] = useState(false)
   const [result, setResult] = useState(null)
+  const [messages, setMessages] = useState([])
+  const [mines, setMines] = useState([])
+  const [seeding, setSeeding] = useState(false)
   const [subsidiary, setSubsidiary] = useState('SECL')
   const [year, setYear] = useState('2023-24')
   const [reporting, setReporting] = useState(false)
@@ -54,17 +62,19 @@ export default function App() {
   }
 
   const refresh = async () => {
-    const [h, d, t, c] = await Promise.allSettled([
+    const [h, d, t, c, m] = await Promise.allSettled([
       getJson('/health'),
       getJson('/api/documents'),
       getJson('/api/topics'),
       getJson('/api/conflicts'),
+      getJson('/api/mines'),
     ])
     if (h.status === 'fulfilled') setHealth(h.value)
     else setHealth({ status: 'offline', store: '—' })
     if (d.status === 'fulfilled' && Array.isArray(d.value)) setDocuments(d.value)
     if (t.status === 'fulfilled' && Array.isArray(t.value)) setTopics(t.value)
-    if (c.status === 'fulfilled' && Array.isArray(c.value)) setConflicts(c.value)
+    if (c.status === 'fulfilled' && Array.isArray(c.value)) setConflicts(mergeConflictActions(c.value))
+    if (m.status === 'fulfilled' && Array.isArray(m.value)) setMines(m.value)
   }
 
   useEffect(() => { refresh() }, [])
@@ -100,15 +110,56 @@ export default function App() {
   const ask = async (text) => {
     const q = (text ?? query).trim()
     if (!q) return
-    setQuery(q)
+    setQuery('')
     setAsking(true)
+    const history = messages.map((m) => ({ role: m.role, content: m.content }))
+    setMessages((prev) => [...prev, { role: 'user', content: q }])
     try {
-      const data = await postJson('/api/query', { query: q })
+      const data = await postJson('/api/query', { query: q, history })
       setResult(data)
+      setMessages((prev) => [...prev, { role: 'assistant', content: data.answer || '', result: data }])
     } catch (err) {
       notify('Query failed', err.message)
     } finally {
       setAsking(false)
+    }
+  }
+
+  const setConflictStatus = async (c, status) => {
+    try {
+      await postJson('/api/conflicts/action', {
+        status,
+        id: c.id,
+        mine: c.mine,
+        year: c.year,
+        parameter: c.parameter,
+      })
+    } catch {
+      /* hosted demo keeps the decision locally */
+    }
+    const saved = saveConflictAction(c, status)
+    setConflicts((prev) => prev.map((row) => (
+      row === c || (row.mine === c.mine && row.year === c.year && row.parameter === c.parameter)
+        ? { ...row, reconciliation_status: status, reviewed_at: saved.reviewed_at }
+        : row
+    )))
+    notify('Logged', `${status.replace('_', ' ')} · ${c.mine}`)
+  }
+
+  const loadDemo = async () => {
+    if (!pythonApiEnabled()) {
+      notify('Read-only demo', 'Start the local API to load the SIH sample pack.')
+      return
+    }
+    setSeeding(true)
+    try {
+      const data = await postJson('/api/demo/seed', {})
+      notify('SIH sample', data.message || 'Loaded')
+      refresh()
+    } catch (err) {
+      notify('Sample pack failed', err.message)
+    } finally {
+      setSeeding(false)
     }
   }
 
@@ -180,7 +231,8 @@ export default function App() {
 
       <nav className="sidenav" aria-label="Primary">
         {[
-          { id: 'ask', label: 'Ask', note: 'Search reports' },
+          { id: 'ask', label: 'Ask', note: 'Follow-up chat' },
+          { id: 'mines', label: 'Mines', note: 'Gevra · Kusmunda · Dipka' },
           { id: 'files', label: 'Documents', note: 'Ingest files' },
           { id: 'review', label: 'Review', note: 'Conflicts & briefs' },
         ].map((item) => (
@@ -241,14 +293,31 @@ export default function App() {
           <section>
             <div className="page-title">
               <h2>Ask CoalMind AI</h2>
-              <p>Natural-language questions over ingested CMPDI / CIL reports. Answers stay grounded on the source page.</p>
+              <p>Ask once, then follow up: “only Gevra”, “show 2023-24”. Answers stay grounded on the source page.</p>
             </div>
             <div className="card">
+              <div className="thread">
+                {messages.length === 0 && (
+                  <p className="hint" style={{ marginBottom: 0 }}>Start with a full question. Follow-ups reuse that context.</p>
+                )}
+                {messages.map((m, i) => (
+                  <div key={`${m.role}-${i}`} className={`bubble ${m.role}`}>
+                    <small>{m.role === 'user' ? 'You' : 'CoalMind AI'}</small>
+                    <div className="answer">
+                      {plain(m.content).split('\n\n').map((p, pi) => (
+                        <p key={pi}>{p}</p>
+                      ))}
+                    </div>
+                    {m.result?.chart_data && <AnalyticsChart chartData={m.result.chart_data} />}
+                  </div>
+                ))}
+                {asking && <p className="hint">Thinking…</p>}
+              </div>
               <div className="search-row">
                 <input
                   type="text"
                   value={query}
-                  placeholder="e.g. Compare coal production between 2022 and 2024"
+                  placeholder={messages.length ? 'Only Gevra  ·  Show 2023-24' : 'Compare coal production between 2022 and 2024'}
                   onChange={(e) => setQuery(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && ask()}
                 />
@@ -258,28 +327,23 @@ export default function App() {
                 </button>
               </div>
               <div className="chips">
-                {SUGGESTIONS.map((s) => (
+                {(messages.length ? FOLLOWUPS : SUGGESTIONS).map((s) => (
                   <button key={s} type="button" onClick={() => ask(s)}>{s}</button>
                 ))}
+                {messages.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => { setMessages([]); setResult(null); setQuery('') }}
+                  >
+                    New thread
+                  </button>
+                )}
               </div>
             </div>
 
             {result && (
               <div className="stack">
-                <div className="card">
-                  <span className={`badge ${result.intent === 'sql' ? 'sql' : 'rag'}`}>
-                    {result.intent === 'sql' ? 'AI · metrics' : 'AI · documents'}
-                    {result.ai_provider ? ` · ${result.ai_provider}` : ''}
-                  </span>
-                  <div className="answer" style={{ marginTop: 14 }}>
-                    {plain(result.answer).split('\n\n').map((p, i) => (
-                      <p key={i}>{p}</p>
-                    ))}
-                  </div>
-                  {result.chart_data && (
-                    <AnalyticsChart chartData={result.chart_data} />
-                  )}
-                </div>
+                <BriefingCard result={result} onViewSource={openProof} />
                 {result.sources?.length > 0 && (
                   <div className="card">
                     <h3>Sources</h3>
@@ -304,6 +368,16 @@ export default function App() {
           </section>
         )}
 
+        {tab === 'mines' && (
+          <section>
+            <div className="page-title">
+              <h2>Mine dashboard</h2>
+              <p>Latest indexed production, overburden, and stripping ratio for the three SIH demo mines.</p>
+            </div>
+            <MineBoard mines={mines} />
+          </section>
+        )}
+
         {tab === 'files' && (
           <section>
             <div className="page-title">
@@ -317,11 +391,16 @@ export default function App() {
             <div className="card drop">
               <h3>Add a report</h3>
               <p>Annual returns, mine registers, and production sheets. Scanned files without OCR on the host are marked, not faked.</p>
-              <label className="btn btn-primary" style={{ cursor: 'pointer' }}>
-                <Upload size={16} />
-                {uploading ? 'Indexing…' : 'Choose file'}
-                <input type="file" accept=".pdf,.xlsx,.xls,.csv" hidden disabled={uploading} onChange={onUpload} />
-              </label>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <label className="btn btn-primary" style={{ cursor: 'pointer' }}>
+                  <Upload size={16} />
+                  {uploading ? 'Indexing…' : 'Choose file'}
+                  <input type="file" accept=".pdf,.xlsx,.xls,.csv" hidden disabled={uploading} onChange={onUpload} />
+                </label>
+                <button type="button" className="btn btn-ghost" disabled={seeding} onClick={loadDemo}>
+                  {seeding ? 'Loading…' : 'Load SIH sample (SECL 2022–24)'}
+                </button>
+              </div>
               {uploadNote && <p className="hint" style={{ marginTop: 14, marginBottom: 0 }}>{uploadNote}</p>}
             </div>
 
@@ -390,7 +469,7 @@ export default function App() {
                 {conflicts.length === 0 ? (
                   <div className="empty">No mismatches in the current store.</div>
                 ) : conflicts.map((c, i) => (
-                  <div className="conflict" key={i} style={{ marginBottom: 10 }}>
+                  <div className="conflict" key={c.id || i} style={{ marginBottom: 10 }}>
                     <header>
                       <strong>{c.mine} · {c.subsidiary} · {c.year}</strong>
                       <span className="badge warn">{c.parameter}</span>
@@ -406,6 +485,26 @@ export default function App() {
                         <b>{c.val2}</b>
                       </div>
                     </div>
+                    <div className="wf">
+                      {[
+                        ['ACCEPTED', 'Accept'],
+                        ['FIELD_CHECK', 'Flag for field check'],
+                        ['IGNORED', 'Ignore'],
+                      ].map(([code, label]) => (
+                        <button
+                          key={code}
+                          type="button"
+                          className={`btn btn-ghost ${String(c.reconciliation_status || '').includes(code) ? 'on' : ''}`}
+                          onClick={() => setConflictStatus(c, code)}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="hint" style={{ marginBottom: 0, marginTop: 8 }}>
+                      {c.reconciliation_status || 'PENDING'}
+                      {c.reviewed_at ? ` · ${new Date(c.reviewed_at).toLocaleString()}` : ''}
+                    </p>
                   </div>
                 ))}
               </div>

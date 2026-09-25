@@ -221,7 +221,7 @@ class SupabaseStore(BaseStore):
         res = (
             self._client.table("conflicts")
             .select(
-                "subsidiary, mine, year, parameter, val1, source1, val2, source2, discrepancy_pct, statutory_impact, reconciliation_status"
+                "id, subsidiary, mine, year, parameter, val1, source1, val2, source2, discrepancy_pct, statutory_impact, reconciliation_status"
             )
             .order("id", desc=True)
             .execute()
@@ -253,6 +253,39 @@ class SupabaseStore(BaseStore):
             "VALIDATION_ENGINE",
             f"Discrepancy at {conflict.get('mine')} ({conflict.get('year')}): {v1} vs {v2}",
         )
+
+    def update_conflict_status(
+        self,
+        status: str,
+        conflict_id: Optional[int] = None,
+        mine: Optional[str] = None,
+        year: Optional[str] = None,
+        parameter: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        stamp = _now()
+        payload = {"reconciliation_status": status, "reviewed_at": stamp}
+        q = self._client.table("conflicts")
+        if conflict_id is not None:
+            q = q.update(payload).eq("id", conflict_id)
+        else:
+            q = q.update(payload).eq("mine", mine).eq("year", year).eq("parameter", parameter)
+        try:
+            res = q.execute()
+        except Exception:
+            payload.pop("reviewed_at", None)
+            q = self._client.table("conflicts")
+            if conflict_id is not None:
+                q = q.update(payload).eq("id", conflict_id)
+            else:
+                q = q.update(payload).eq("mine", mine).eq("year", year).eq("parameter", parameter)
+            res = q.execute()
+        rows = list(res.data or [])
+        if not rows:
+            raise KeyError("Conflict not found")
+        row = rows[0]
+        row["reviewed_at"] = stamp
+        self.log_audit("CONFLICT_REVIEW", "OFFICER", f"{status} {mine or conflict_id}")
+        return row
 
     def log_audit(self, event_type: str, operator: str, details: str) -> None:
         timestamp = _now()

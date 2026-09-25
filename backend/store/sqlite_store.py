@@ -84,9 +84,14 @@ class SQLiteStore(BaseStore):
                     discrepancy_pct REAL,
                     statutory_impact TEXT,
                     reconciliation_status TEXT,
-                    detected_at TEXT
+                    detected_at TEXT,
+                    reviewed_at TEXT
                 )
             """)
+            try:
+                cursor.execute("ALTER TABLE conflicts ADD COLUMN reviewed_at TEXT")
+            except Exception:
+                pass
             # Immutable System Security & Provenance Audit Log
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS audit_logs (
@@ -313,8 +318,8 @@ class SQLiteStore(BaseStore):
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT subsidiary, mine, year, parameter, val1, source1, val2, source2, 
-                       discrepancy_pct, statutory_impact, reconciliation_status 
+                SELECT id, subsidiary, mine, year, parameter, val1, source1, val2, source2, 
+                       discrepancy_pct, statutory_impact, reconciliation_status, reviewed_at
                 FROM conflicts ORDER BY id DESC
             """)
             rows = cursor.fetchall()
@@ -350,6 +355,50 @@ class SQLiteStore(BaseStore):
 
         self.log_audit("DISCREPANCY_FLAGGED", "VALIDATION_ENGINE", 
                        f"Discrepancy at {conflict.get('mine')} ({conflict.get('year')}): {v1} vs {v2} ({diff_pct}%)")
+
+    def update_conflict_status(
+        self,
+        status: str,
+        conflict_id: Optional[int] = None,
+        mine: Optional[str] = None,
+        year: Optional[str] = None,
+        parameter: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        stamp = datetime.utcnow().isoformat() + "Z"
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            if conflict_id is not None:
+                cursor.execute(
+                    "UPDATE conflicts SET reconciliation_status = ?, reviewed_at = ? WHERE id = ?",
+                    (status, stamp, conflict_id),
+                )
+            else:
+                cursor.execute(
+                    """UPDATE conflicts SET reconciliation_status = ?, reviewed_at = ?
+                       WHERE mine = ? AND year = ? AND parameter = ?""",
+                    (status, stamp, mine, year, parameter),
+                )
+            conn.commit()
+            if conflict_id is not None:
+                cursor.execute(
+                    """SELECT id, subsidiary, mine, year, parameter, val1, source1, val2, source2,
+                              discrepancy_pct, statutory_impact, reconciliation_status, reviewed_at
+                       FROM conflicts WHERE id = ?""",
+                    (conflict_id,),
+                )
+            else:
+                cursor.execute(
+                    """SELECT id, subsidiary, mine, year, parameter, val1, source1, val2, source2,
+                              discrepancy_pct, statutory_impact, reconciliation_status, reviewed_at
+                       FROM conflicts WHERE mine = ? AND year = ? AND parameter = ?
+                       ORDER BY id DESC LIMIT 1""",
+                    (mine, year, parameter),
+                )
+            row = cursor.fetchone()
+        if not row:
+            raise KeyError("Conflict not found")
+        self.log_audit("CONFLICT_REVIEW", "OFFICER", f"{status} {mine or conflict_id}")
+        return dict(row)
 
     def log_audit(self, event_type: str, operator: str, details: str):
         timestamp = datetime.utcnow().isoformat() + "Z"

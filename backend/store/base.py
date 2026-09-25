@@ -42,3 +42,14 @@ class BaseStore(ABC):
     @abstractmethod
     def add_conflict(self, conflict: Dict[str, Any]) -> None:
         pass
+
+    @abstractmethod
+    def update_conflict_status(
+        self,
+        status: str,
+        conflict_id: Optional[int] = None,
+        mine: Optional[str] = None,
+        year: Optional[str] = None,
+        parameter: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        pass
