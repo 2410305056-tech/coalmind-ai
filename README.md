@@ -1,6 +1,8 @@
-# CoalMind
+# CoalMind AI
 
 Document intelligence for CMPDI / Coal India (SIH 26023). Team AGNIVAULT.
+
+**Prototype report (with screenshots):** [docs/SIH26023_CoalMind_AI_Prototype_Report.md](docs/SIH26023_CoalMind_AI_Prototype_Report.md) · [PDF](docs/SIH26023_CoalMind_AI_Prototype_Report.pdf)
 
 Upload mining reports → extract text and metrics → ask in English → see the source page → flag conflicting numbers → download a brief.
 

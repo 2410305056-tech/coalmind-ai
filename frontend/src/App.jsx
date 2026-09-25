@@ -78,6 +78,10 @@ export default function App() {
   }
 
   useEffect(() => { refresh() }, [])
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get('tab')
+    if (t && ['ask', 'mines', 'files', 'review'].includes(t)) setTab(t)
+  }, [])
 
   const onUpload = async (e) => {
     const file = e.target.files?.[0]
