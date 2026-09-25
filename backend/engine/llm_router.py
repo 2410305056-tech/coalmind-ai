@@ -15,10 +15,10 @@ SYSTEM = (
 )
 
 GEMINI_MODELS = (
-    "gemini-2.0-flash",
-    "gemini-2.5-flash",
+    "gemini-3.8-flash",
     "gemini-flash-latest",
-    "gemini-1.5-flash",
+    "gemini-3-flash-preview",
+    "gemini-pro-latest",
 )
 
 GROQ_MODELS = (
@@ -281,13 +281,22 @@ async def _call_groq(user_text: str) -> Optional[str]:
     return None
 
 
+def _gemini_text(data: dict) -> Optional[str]:
+    for cand in data.get("candidates") or []:
+        parts = ((cand.get("content") or {}).get("parts")) or []
+        bits = [p.get("text", "") for p in parts if p.get("text")]
+        if bits:
+            return "\n".join(bits).strip()
+    return None
+
+
 async def _call_gemini(user_text: str) -> Optional[str]:
     payload = {
         "systemInstruction": {"parts": [{"text": SYSTEM}]},
         "contents": [{"parts": [{"text": user_text}]}],
         "generationConfig": {"temperature": 0.2},
     }
-    async with httpx.AsyncClient(timeout=20.0) as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         for model in GEMINI_MODELS:
             try:
                 url = (
@@ -295,9 +304,11 @@ async def _call_gemini(user_text: str) -> Optional[str]:
                     f"{model}:generateContent?key={GEMINI_API_KEY}"
                 )
                 resp = await client.post(url, json=payload)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    return data["candidates"][0]["content"]["parts"][0]["text"]
+                if resp.status_code != 200:
+                    continue
+                text = _gemini_text(resp.json())
+                if text:
+                    return text
             except Exception:
                 continue
     return None
