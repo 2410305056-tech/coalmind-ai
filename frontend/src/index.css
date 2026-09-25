@@ -161,9 +161,9 @@ a {
   font-weight: 500;
 }
 
-.nav-btn:hover { background: #f1f3f4; }
+.nav-btn:hover { background: var(--gold-soft); }
 .nav-btn.active {
-  background: var(--blue-soft);
+  background: var(--gold-soft);
   color: var(--blue);
 }
 
@@ -174,7 +174,7 @@ a {
   color: var(--muted);
 }
 
-.nav-btn.active small { color: #1967d2; }
+.nav-btn.active small { color: var(--gold); }
 
 .main {
   padding: 24px 32px 48px;
@@ -277,7 +277,7 @@ a {
   gap: 8px;
   height: 36px;
   padding: 0 16px;
-  border-radius: 4px;
+  border-radius: 8px;
   border: 1px solid transparent;
   cursor: pointer;
   font-size: 14px;
@@ -287,22 +287,29 @@ a {
 .btn:disabled { opacity: 0.55; cursor: not-allowed; }
 
 .btn-primary {
-  background: var(--blue);
-  color: #fff;
+  background: var(--gold-soft);
+  color: var(--blue);
+  border-color: var(--gold);
 }
-.btn-primary:hover:not(:disabled) { background: var(--blue-hover); }
+.btn-primary:hover:not(:disabled) {
+  background: #ead9b4;
+  border-color: #b08d3f;
+}
 
 .btn-ghost {
-  background: transparent;
+  background: var(--surface);
   color: var(--blue);
   border-color: var(--line);
 }
-.btn-ghost:hover:not(:disabled) { background: var(--blue-soft); }
+.btn-ghost:hover:not(:disabled) {
+  background: var(--blue-soft);
+  border-color: #c5d2d8;
+}
 
 .btn-danger {
   background: var(--danger-soft);
   color: var(--danger);
-  border-color: transparent;
+  border-color: #f0c9c5;
 }
 
 .toolbar {
@@ -330,7 +337,7 @@ a {
   color: var(--muted);
 }
 .seg button + button { border-left: 1px solid var(--line); }
-.seg button.on { background: var(--blue-soft); color: var(--blue); font-weight: 500; }
+.seg button.on { background: var(--gold-soft); color: var(--blue); font-weight: 500; }
 
 .table-wrap { overflow: auto; }
 
@@ -412,7 +419,11 @@ table.data tr:hover td { background: #f8f9fa; }
   color: var(--muted);
   cursor: pointer;
 }
-.chips button:hover { border-color: var(--blue); color: var(--blue); }
+.chips button:hover {
+  border-color: var(--gold);
+  color: var(--blue);
+  background: var(--gold-soft);
+}
 
 .answer {
   font-size: 15px;
