@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
-  Search, Upload, FileText, AlertTriangle, Download, Eye, X, RefreshCw,
+  Upload, FileText, AlertTriangle, Download, Eye, X, RefreshCw, Sparkles,
 } from 'lucide-react'
 import ProofModal from './components/ProofModal'
 import AnalyticsChart from './components/AnalyticsChart'
@@ -159,12 +159,18 @@ export default function App() {
         <div className="brand">
           <Logo size={40} />
           <div>
-            <h1>CoalMind</h1>
+            <h1>CoalMind AI</h1>
             <p>CMPDI / Coal India document intelligence</p>
           </div>
         </div>
         <div className="top-meta">
           <span className="chip">SIH 26023</span>
+          <span className="chip">
+            <Sparkles size={12} />
+            {health.ai_provider === 'gemini' || health.ai_provider === 'groq'
+              ? `AI · ${health.ai_provider}`
+              : 'AI · grounded'}
+          </span>
           <span className="chip">
             <span className={`dot ${online ? 'ok' : 'bad'}`} />
             {online ? `Connected · ${health.store}` : 'API offline'}
@@ -226,16 +232,16 @@ export default function App() {
           </button>
           <div className="kpi">
             <span>Engine</span>
-            <strong style={{ fontSize: 18, marginTop: 10 }}>RAG + SQL</strong>
-            <em>Cited answers</em>
+            <strong style={{ fontSize: 18, marginTop: 10 }}>CoalMind AI</strong>
+            <em>Grounded answers + citations</em>
           </div>
         </div>
 
         {tab === 'ask' && (
           <section>
             <div className="page-title">
-              <h2>Ask the archive</h2>
-              <p>Natural-language questions over ingested CMPDI / CIL reports. Answers include the source page.</p>
+              <h2>Ask CoalMind AI</h2>
+              <p>Natural-language questions over ingested CMPDI / CIL reports. Answers stay grounded on the source page.</p>
             </div>
             <div className="card">
               <div className="search-row">
@@ -247,8 +253,8 @@ export default function App() {
                   onKeyDown={(e) => e.key === 'Enter' && ask()}
                 />
                 <button className="btn btn-primary" disabled={asking} onClick={() => ask()}>
-                  {asking ? <RefreshCw size={16} /> : <Search size={16} />}
-                  {asking ? 'Working' : 'Ask'}
+                  {asking ? <RefreshCw size={16} /> : <Sparkles size={16} />}
+                  {asking ? 'Thinking' : 'Ask AI'}
                 </button>
               </div>
               <div className="chips">
@@ -262,7 +268,8 @@ export default function App() {
               <div className="stack">
                 <div className="card">
                   <span className={`badge ${result.intent === 'sql' ? 'sql' : 'rag'}`}>
-                    {result.intent === 'sql' ? 'Structured metrics' : 'Document search'}
+                    {result.intent === 'sql' ? 'AI · metrics' : 'AI · documents'}
+                    {result.ai_provider ? ` · ${result.ai_provider}` : ''}
                   </span>
                   <div className="answer" style={{ marginTop: 14 }}>
                     {plain(result.answer).split('\n\n').map((p, i) => (

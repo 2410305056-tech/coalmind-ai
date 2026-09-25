@@ -1,33 +1,56 @@
-import re
 import json
+from typing import Any, Dict, List, Optional, Tuple
+
 import httpx
-from typing import Dict, Any, List, Optional
-from backend.config import GROQ_API_KEY, GEMINI_API_KEY
-from backend.store.base import BaseStore
+
+from backend.config import GEMINI_API_KEY, GROQ_API_KEY
 from backend.engine.embedding import embedder
+from backend.store.base import BaseStore
+
+SYSTEM = (
+    "You are CoalMind AI, a copilot for CMPDI and Coal India reports. "
+    "Answer only from the archive excerpts and metrics provided. "
+    "Cite document name and page. If the archive does not contain the answer, say so. "
+    "Do not invent figures. Be concise. Use Indian financial-year labels when present."
+)
+
+GEMINI_MODELS = (
+    "gemini-2.0-flash",
+    "gemini-2.5-flash",
+    "gemini-flash-latest",
+    "gemini-1.5-flash",
+)
+
+GROQ_MODELS = (
+    "llama-3.1-8b-instant",
+    "llama-3.3-70b-versatile",
+)
+
+
+def ai_status() -> Dict[str, Any]:
+    if GROQ_API_KEY:
+        return {"ai": True, "ai_provider": "groq"}
+    if GEMINI_API_KEY:
+        return {"ai": True, "ai_provider": "gemini"}
+    return {"ai": True, "ai_provider": "grounded"}
+
 
 def classify_query_intent(query: str) -> str:
-    """
-    Classifies user natural-language query into 'sql' or 'rag'.
-    """
     q_low = query.lower()
     sql_triggers = [
-        "compare", "production", "chart", "graph", "metric", "trend", 
-        "between", "versus", "vs", "total", "average", "output", "tonnes", 
-        "obr", "stripping ratio", "target", "historical", "growth"
+        "compare", "production", "chart", "graph", "metric", "trend",
+        "between", "versus", "vs", "total", "average", "output", "tonnes",
+        "obr", "stripping ratio", "target", "historical", "growth",
     ]
-    for trigger in sql_triggers:
-        if trigger in q_low:
-            return "sql"
-    return "rag"
+    return "sql" if any(t in q_low for t in sql_triggers) else "rag"
+
 
 async def process_query(query: str, store: BaseStore) -> Dict[str, Any]:
     intent = classify_query_intent(query)
-    
     if intent == "sql":
         return await _handle_sql_intent(query, store)
-    else:
-        return await _handle_rag_intent(query, store)
+    return await _handle_rag_intent(query, store)
+
 
 async def _handle_sql_intent(query: str, store: BaseStore) -> Dict[str, Any]:
     q_low = query.lower()
@@ -36,7 +59,7 @@ async def _handle_sql_intent(query: str, store: BaseStore) -> Dict[str, Any]:
         if m in q_low:
             mine_target = m.capitalize()
             break
-            
+
     sub_target = None
     for s in ["secl", "mcl", "ncl", "bccl", "ccl", "ecl", "wcl", "cmpdi"]:
         if s in q_low:
@@ -49,183 +72,232 @@ async def _handle_sql_intent(query: str, store: BaseStore) -> Dict[str, Any]:
     elif "stripping" in q_low:
         param_target = "Stripping Ratio"
 
-    # Query metrics from SQLite store
     records = store.query_metrics(mine=mine_target, subsidiary=sub_target, parameter=param_target)
-    
     if not records:
         records = store.query_metrics(parameter=param_target)
     if not records:
         records = store.query_metrics()
 
-    # Deduplicate by (mine, year) keeping highest confidence or unique source
     deduped: Dict[str, Dict[str, Any]] = {}
-    sources = []
+    sources: List[Dict[str, Any]] = []
     seen_sources = set()
 
     for r in sorted(records, key=lambda x: str(x.get("year", ""))):
         key = f"{r.get('mine', 'Mine')}_{r.get('year', 'FY')}"
         if key not in deduped:
             deduped[key] = r
-            
         src_key = f"{r.get('source_doc')}:{r.get('page_number')}"
         if src_key not in seen_sources:
             seen_sources.add(src_key)
             sources.append({
                 "document_name": r.get("source_doc", "CIL_Annual_Report.pdf"),
-                "page_number": int(r.get("page_number", 1)),
-                "bounding_box": [72.0, 140.0, 520.0, 220.0]
+                "page_number": int(r.get("page_number", 1) or 1),
+                "bounding_box": [72.0, 140.0, 520.0, 220.0],
             })
 
     labels = []
     values = []
-    for k, r in list(deduped.items())[:8]:
-        lbl = f"{r.get('mine', 'Mine')} ({r.get('year', 'FY')})"
-        val = float(r.get("value", 0.0))
-        labels.append(lbl)
-        values.append(val)
+    fact_rows = []
+    for r in list(deduped.values())[:8]:
+        labels.append(f"{r.get('mine', 'Mine')} ({r.get('year', 'FY')})")
+        values.append(float(r.get("value", 0.0) or 0.0))
+        fact_rows.append({
+            "mine": r.get("mine"),
+            "year": r.get("year"),
+            "parameter": r.get("parameter"),
+            "value": r.get("value"),
+            "unit": r.get("unit"),
+            "source": r.get("source_doc"),
+            "page": r.get("page_number"),
+        })
 
     unit = "MT" if "Production" in param_target else ("M.Cum" if "OBR" in param_target else "ratio")
-    
-    # Check if there is an active conflict for this mine/parameter
+
     conflicts = store.get_conflicts()
     relevant_conflict = None
     for c in conflicts:
-        if (not mine_target or c["mine"].lower() == mine_target.lower()) and param_target.lower() in c["parameter"].lower():
+        if (not mine_target or str(c.get("mine", "")).lower() == mine_target.lower()) and param_target.lower() in str(c.get("parameter", "")).lower():
             relevant_conflict = c
             break
 
-    conflict_alert_txt = ""
+    context = "INDEXED METRICS (JSON):\n" + json.dumps(fact_rows, ensure_ascii=False, indent=2)
     if relevant_conflict:
-        conflict_alert_txt = (
-            f"\n\n> ⚠️ **Data Integrity Alert (SIH Demo #7)**: Automated reconciliation flagged a discrepancy for "
-            f"**{relevant_conflict['mine']} ({relevant_conflict['year']})**: "
-            f"**{relevant_conflict['val1']} {unit}** in *{relevant_conflict['source1']}* vs "
-            f"**{relevant_conflict['val2']} {unit}** in *{relevant_conflict['source2']}*. "
-            f"Inspect discrepancy details in Tab 3 (Executive Studio)."
-        )
+        context += "\n\nFLAGGED DISCREPANCY:\n" + json.dumps(relevant_conflict, ensure_ascii=False, indent=2)
 
-    # Compute growth / variance analysis
-    ans_details = ""
-    if len(values) >= 2:
-        v_start = values[0]
-        v_end = values[-1]
-        pct = round(((v_end - v_start) / max(0.01, v_start)) * 100, 1)
-        growth_txt = f"an overall expansion of +{pct}%" if pct >= 0 else f"a reduction of {pct}%"
-        ans_details = f" Coal output exhibited {growth_txt} across the recorded intervals, progressing from {v_start} {unit} ({labels[0]}) to {v_end} {unit} ({labels[-1]})."
-
-    answer = (
-        f"**SQL Analytics Engine Execution**: Extracted verified quantitative data for **{param_target}** "
-        f"{f'at {mine_target}' if mine_target else 'across subsidiaries'} across the requested reporting years.{ans_details} "
-        f"All metrics are sourced directly from ingested archival filings with 100% audit-ready provenance.{conflict_alert_txt}"
+    answer, provider = await _complete(
+        f"{context}\n\nQuestion: {query}\nWrite a short briefing with the figures above."
     )
+    if not answer:
+        answer = _grounded_sql(query, param_target, mine_target, fact_rows, unit, relevant_conflict)
+        provider = "grounded"
 
     chart_data = {
         "type": "bar",
         "unit": unit,
-        "labels": labels if labels else ["2021-22", "2022-23", "2023-24", "2024-25"],
-        "values": values if values else [48.2, 52.5, 56.8, 60.1]
+        "labels": labels,
+        "values": values,
     }
-
-    if not sources:
-        sources.append({
-            "document_name": "CMPDI_SECL_Annual_Report_2023_24.pdf",
-            "page_number": 4,
-            "bounding_box": [64.0, 115.0, 530.0, 195.0]
-        })
 
     return {
         "answer": answer,
         "intent": "sql",
-        "chart_data": chart_data,
-        "sources": sources
+        "chart_data": chart_data if labels else None,
+        "sources": sources,
+        "ai": True,
+        "ai_provider": provider,
     }
 
+
 async def _handle_rag_intent(query: str, store: BaseStore) -> Dict[str, Any]:
-    # Vector search top chunks
     q_vec = embedder.embed_text(query)
     chunks = store.search_chunks(q_vec, top_k=4)
-    
+
     sources = []
-    context_text = ""
-    
+    excerpts = []
     for c in chunks:
         sources.append({
             "document_name": c["document_name"],
             "page_number": c["page_number"],
-            "bounding_box": c["bounding_box"]
+            "bounding_box": c.get("bounding_box") or [55.0, 80.0, 540.0, 160.0],
         })
-        context_text += f"\n--- Source: {c['document_name']} (Page {c['page_number']}) ---\n{c['text']}\n"
+        excerpts.append({
+            "document": c["document_name"],
+            "page": c["page_number"],
+            "text": (c.get("text") or "")[:1200],
+        })
 
-    # Try external LLM if API key exists, otherwise fallback to extractive synthesis
-    answer = None
-    if GROQ_API_KEY:
-        answer = await _call_groq(query, context_text)
-    elif GEMINI_API_KEY:
-        answer = await _call_gemini(query, context_text)
-
+    context = "ARCHIVE EXCERPTS:\n" + json.dumps(excerpts, ensure_ascii=False, indent=2)
+    answer, provider = await _complete(
+        f"{context}\n\nQuestion: {query}\nAnswer from these excerpts only. Quote briefly."
+    )
     if not answer:
-        # High-precision domain extractive synthesis
-        if chunks:
-            top_chunk = chunks[0]
-            answer = (
-                f"**Semantic Vector RAG Synthesis**: According to verified archival records in "
-                f"**{top_chunk['document_name']}** (Page {top_chunk['page_number']}):\n\n"
-                f"> \"{top_chunk['text'].strip()}\"\n\n"
-                f"Key operational takeaways indicate strict alignment with Ministry of Coal guidelines, "
-                f"geological survey specifications, and verified CMPDI benchmark standards."
-            )
-        else:
-            answer = (
-                f"**Semantic Vector RAG Search**: Queried repository for *\"{query}\"*. "
-                f"Document intelligence indicates standard CIL geological reserve compliance and operational "
-                f"parameters across Korba and Central coalfield basins."
-            )
+        answer = _grounded_rag(query, excerpts)
+        provider = "grounded"
 
     return {
         "answer": answer,
         "intent": "rag",
         "chart_data": None,
-        "sources": sources if sources else [{
-            "document_name": "SECL_Geological_Survey_2024.pdf",
-            "page_number": 2,
-            "bounding_box": [55.0, 80.0, 540.0, 160.0]
-        }]
+        "sources": sources,
+        "ai": True,
+        "ai_provider": provider,
     }
 
-async def _call_groq(query: str, context: str) -> Optional[str]:
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-                json={
-                    "model": "llama-3.1-8b-instant",
-                    "messages": [
-                        {"role": "system", "content": "You are CoalMind AI, an expert mining geologist for CMPDI/CIL. Answer precisely citing the context provided."},
-                        {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {query}"}
-                    ],
-                    "temperature": 0.2
-                }
+
+def _grounded_sql(query, param, mine, rows, unit, conflict) -> str:
+    if not rows:
+        return (
+            f"CoalMind AI searched indexed metrics for “{query}” and found no matching rows. "
+            "Upload a production register or annual report, then ask again."
+        )
+    parts = [
+        f"CoalMind AI reviewed {len(rows)} indexed figures for **{param}**"
+        + (f" at **{mine}**" if mine else "")
+        + "."
+    ]
+    bullets = []
+    for r in rows:
+        bullets.append(
+            f"- {r.get('mine') or 'Mine'} ({r.get('year') or 'FY'}): "
+            f"{r.get('value')} {r.get('unit') or unit} — {r.get('source') or 'archive'}"
+        )
+    if len(rows) >= 2:
+        try:
+            start = float(rows[0]["value"])
+            end = float(rows[-1]["value"])
+            pct = round(((end - start) / max(0.01, abs(start))) * 100, 1)
+            direction = "up" if pct >= 0 else "down"
+            parts.append(
+                f"Across the series, values move {direction} {abs(pct)}% "
+                f"from {rows[0]['value']} to {rows[-1]['value']} {unit}."
             )
-            if resp.status_code == 200:
-                return resp.json()["choices"][0]["message"]["content"]
-    except Exception:
-        pass
+        except (TypeError, ValueError, KeyError):
+            pass
+    parts.append("Cited metrics:\n" + "\n".join(bullets))
+    if conflict:
+        parts.append(
+            f"Integrity flag: {conflict.get('mine')} {conflict.get('year')} "
+            f"{conflict.get('parameter')} is {conflict.get('val1')} in {conflict.get('source1')} "
+            f"vs {conflict.get('val2')} in {conflict.get('source2')}."
+        )
+    return "\n\n".join(parts)
+
+
+def _grounded_rag(query, excerpts) -> str:
+    if not excerpts:
+        return (
+            f"CoalMind AI found no matching passages for “{query}”. "
+            "Ingest a PDF or spreadsheet and retry."
+        )
+    top = excerpts[0]
+    quote = " ".join(str(top.get("text") or "").split())[:420]
+    more = ""
+    if len(excerpts) > 1:
+        names = ", ".join(f"{e['document']} p.{e['page']}" for e in excerpts[1:3])
+        more = f" Also consulted: {names}."
+    return (
+        f"CoalMind AI (grounded on the archive):\n\n"
+        f"From **{top.get('document')}** (page {top.get('page')}):\n\n"
+        f"> {quote}\n\n"
+        f"This is the closest passage to “{query}”.{more}"
+    )
+
+
+async def _complete(user_text: str) -> Tuple[Optional[str], str]:
+    if GROQ_API_KEY:
+        text = await _call_groq(user_text)
+        if text:
+            return text, "groq"
+    if GEMINI_API_KEY:
+        text = await _call_gemini(user_text)
+        if text:
+            return text, "gemini"
+    return None, "grounded"
+
+
+async def _call_groq(user_text: str) -> Optional[str]:
+    for model in GROQ_MODELS:
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp = await client.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {GROQ_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": SYSTEM},
+                            {"role": "user", "content": user_text},
+                        ],
+                        "temperature": 0.2,
+                    },
+                )
+                if resp.status_code == 200:
+                    return resp.json()["choices"][0]["message"]["content"]
+        except Exception:
+            continue
     return None
 
-async def _call_gemini(query: str, context: str) -> Optional[str]:
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-        payload = {
-            "contents": [{
-                "parts": [{"text": f"You are CoalMind AI, expert mining geologist for CMPDI/CIL.\n\nContext:\n{context}\n\nQuestion: {query}"}]
-            }]
-        }
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(url, json=payload)
-            if resp.status_code == 200:
-                data = resp.json()
-                return data["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception:
-        pass
+
+async def _call_gemini(user_text: str) -> Optional[str]:
+    payload = {
+        "systemInstruction": {"parts": [{"text": SYSTEM}]},
+        "contents": [{"parts": [{"text": user_text}]}],
+        "generationConfig": {"temperature": 0.2},
+    }
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        for model in GEMINI_MODELS:
+            try:
+                url = (
+                    "https://generativelanguage.googleapis.com/v1beta/models/"
+                    f"{model}:generateContent?key={GEMINI_API_KEY}"
+                )
+                resp = await client.post(url, json=payload)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return data["candidates"][0]["content"]["parts"][0]["text"]
+            except Exception:
+                continue
     return None

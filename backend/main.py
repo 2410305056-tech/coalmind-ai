@@ -15,7 +15,7 @@ from backend.config import UPLOADS_DIR, REPORTS_DIR, STORE_TYPE, MAX_UPLOAD_SIZE
 from backend.store.supabase_store import get_store
 from backend.engine.parser import parse_document
 from backend.engine.conflict_detector import scan_and_record_conflicts
-from backend.engine.llm_router import process_query
+from backend.engine.llm_router import ai_status, process_query
 from backend.engine.report_generator import generate_executive_pdf
 from backend.sample_data.seed_generator import ensure_sample_files
 
@@ -111,11 +111,13 @@ def health_check():
     GET /health
     Returns: { "status": "ok", "store": "sqlite"|"supabase", "python_ok": true }
     """
-    return {
+    status = {
         "status": "ok",
         "store": getattr(store, "engine_name", STORE_TYPE or "sqlite"),
         "python_ok": True,
     }
+    status.update(ai_status())
+    return status
 
 @app.post("/api/upload")
 async def upload_document(file: UploadFile = File(...)):

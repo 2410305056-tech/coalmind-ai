@@ -1,5 +1,6 @@
 const SB_URL = String(import.meta.env.VITE_SUPABASE_URL || '').replace(/\/$/, '')
 const SB_ANON = String(import.meta.env.VITE_SUPABASE_ANON_KEY || '')
+const GEMINI_KEY = String(import.meta.env.VITE_GEMINI_API_KEY || '')
 
 const SQL_TRIGGERS = [
   'compare', 'production', 'chart', 'graph', 'metric', 'trend',
@@ -28,7 +29,13 @@ async function rest(table, params = '') {
 
 export async function cloudHealth() {
   await rest('documents', '?select=id&limit=1')
-  return { status: 'ok', store: 'supabase', python_ok: false }
+  return {
+    status: 'ok',
+    store: 'supabase',
+    python_ok: false,
+    ai: true,
+    ai_provider: GEMINI_KEY ? 'gemini' : 'grounded',
+  }
 }
 
 export async function cloudDocuments() {
@@ -88,11 +95,27 @@ export async function cloudQuery(query) {
       return (r.parameter || '').toLowerCase().includes('production') || !r.parameter
     })
     const use = (filtered.length ? filtered : rows).slice(0, 8)
+    const facts = use.map((r) => ({
+      mine: r.mine,
+      year: r.year,
+      parameter: r.parameter,
+      value: r.value,
+      unit: r.unit,
+      source: r.source_doc,
+      page: r.page_number,
+    }))
+    const fallback = facts.length
+      ? `CoalMind AI reviewed ${facts.length} indexed figures.\n\n` +
+        facts
+          .map((r) => `- ${r.mine || 'Mine'} (${r.year || 'FY'}): ${r.value} ${r.unit || 'MT'} — ${r.source || 'archive'}`)
+          .join('\n')
+      : 'No metric rows in the archive yet.'
+    const llm = await geminiAnswer(query, JSON.stringify(facts, null, 2))
     return {
       intent: 'sql',
-      answer: use.length
-        ? `Structured metrics from the Supabase archive (${use.length} rows). Figures come from ingested filings, not a language model.`
-        : 'No metric rows in Supabase yet.',
+      answer: llm || fallback,
+      ai: true,
+      ai_provider: llm ? 'gemini' : 'grounded',
       chart_data: {
         type: 'bar',
         unit: 'MT',
@@ -120,18 +143,54 @@ export async function cloudQuery(query) {
   scored.sort((a, b) => b.score - a.score)
   const top = scored.filter((c) => c.score > 0).slice(0, 4)
   const pick = top[0] || scored[0]
-  const quote = pick?.text ? `"${String(pick.text).slice(0, 420)}"` : 'No matching passage.'
+  const quote = pick?.text ? String(pick.text).replace(/\s+/g, ' ').slice(0, 420) : ''
+  const excerpts = (top.length ? top : pick ? [pick] : []).map((s) => ({
+    document: s.document_name,
+    page: s.page_number,
+    text: String(s.text || '').slice(0, 800),
+  }))
+  const fallback = pick
+    ? `CoalMind AI (grounded on the archive):\n\nFrom **${pick.document_name}** (page ${pick.page_number}):\n\n> ${quote}`
+    : 'The archive has no chunks yet.'
+  const llm = await geminiAnswer(query, JSON.stringify(excerpts, null, 2))
   return {
     intent: 'rag',
-    answer: pick
-      ? `From ${pick.document_name} (page ${pick.page_number}): ${quote}`
-      : 'The archive has no chunks yet.',
+    answer: llm || fallback,
+    ai: true,
+    ai_provider: llm ? 'gemini' : 'grounded',
     chart_data: null,
     sources: (top.length ? top : pick ? [pick] : []).map((s) => ({
       document_name: s.document_name,
       page_number: s.page_number,
       bounding_box: s.bounding_box || [60, 100, 540, 200],
     })),
+  }
+}
+
+async function geminiAnswer(query, context) {
+  if (!GEMINI_KEY) return null
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: {
+            parts: [{
+              text: 'You are CoalMind AI for CMPDI/CIL. Answer only from the archive context. Cite document and page. Do not invent numbers.',
+            }],
+          },
+          contents: [{ parts: [{ text: `Context:\n${context}\n\nQuestion: ${query}` }] }],
+          generationConfig: { temperature: 0.2 },
+        }),
+      },
+    )
+    if (!res.ok) return null
+    const data = await res.json()
+    return data?.candidates?.[0]?.content?.parts?.[0]?.text || null
+  } catch {
+    return null
   }
 }
 
