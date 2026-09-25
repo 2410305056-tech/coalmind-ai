@@ -32,7 +32,7 @@ export default function AnalyticsChart({ chartData }) {
           const y = pad.t + innerH - bh
           return (
             <g key={labels[i]}>
-              <rect x={x} y={y} width={bar} height={bh} rx="2" fill="#1a73e8" />
+              <rect x={x} y={y} width={bar} height={bh} rx="2" fill="#1b3a4b" />
               <text x={x + bar / 2} y={y - 6} textAnchor="middle" fontSize="11" fill="#202124">
                 {v}
               </text>

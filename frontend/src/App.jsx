@@ -4,6 +4,7 @@ import {
 } from 'lucide-react'
 import ProofModal from './components/ProofModal'
 import AnalyticsChart from './components/AnalyticsChart'
+import Logo from './components/Logo'
 import { apiUrl, getJson, postJson, pythonApiEnabled } from './lib/api'
 
 const SUGGESTIONS = [
@@ -156,7 +157,7 @@ export default function App() {
     <div className="shell">
       <header className="topbar">
         <div className="brand">
-          <div className="mark" aria-hidden>C</div>
+          <Logo size={40} />
           <div>
             <h1>CoalMind</h1>
             <p>CMPDI / Coal India document intelligence</p>
