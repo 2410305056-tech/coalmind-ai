@@ -94,6 +94,12 @@ a {
   letter-spacing: 0;
 }
 
+.ai-word {
+  color: var(--gold);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
 .brand p {
   font-size: 12px;
   color: var(--muted);

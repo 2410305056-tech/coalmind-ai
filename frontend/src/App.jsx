@@ -210,7 +210,7 @@ export default function App() {
         <div className="brand">
           <Logo size={40} />
           <div>
-            <h1>CoalMind AI</h1>
+            <h1>CoalMind <span className="ai-word">AI</span></h1>
             <p>CMPDI / Coal India document intelligence</p>
           </div>
         </div>
