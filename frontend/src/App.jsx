@@ -320,7 +320,7 @@ export default function App() {
             <div className="toolbar">
               <h3 style={{ fontSize: 16, fontWeight: 500 }}>Library ({docs.length})</h3>
               <div className="seg">
-                {['all', 'pdf', 'xlsx'].map((t) => (
+                {['all', 'pdf', 'xlsx', 'csv'].map((t) => (
                   <button key={t} className={docFilter === t ? 'on' : ''} onClick={() => setDocFilter(t)}>
                     {t === 'all' ? 'All' : t.toUpperCase()}
                   </button>

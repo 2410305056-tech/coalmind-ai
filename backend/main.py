@@ -113,8 +113,8 @@ def health_check():
     """
     return {
         "status": "ok",
-        "store": "supabase" if STORE_TYPE == "supabase" else "sqlite",
-        "python_ok": True
+        "store": getattr(store, "engine_name", STORE_TYPE or "sqlite"),
+        "python_ok": True,
     }
 
 @app.post("/api/upload")
@@ -150,10 +150,9 @@ async def upload_document(file: UploadFile = File(...)):
 
     try:
         # Parse document into chunks and metrics
-        chunks, metrics, *_ = parse_document(save_path, doc_id, filename)
-        
-        # Save to store
-        store.add_document(doc_id, filename, norm_type, "completed", str(save_path))
+        chunks, metrics, parse_status = parse_document(save_path, doc_id, filename)
+        status_label = parse_status if parse_status in ("completed", "ocr_unavailable", "failed") else "completed"
+        store.add_document(doc_id, filename, norm_type, status_label, str(save_path))
         chunk_count = store.add_chunks(chunks)
         metrics_count = store.add_metrics(metrics)
 
@@ -164,7 +163,7 @@ async def upload_document(file: UploadFile = File(...)):
             "document_id": doc_id,
             "filename": filename,
             "file_type": norm_type,
-            "status": "completed",
+            "status": status_label,
             "chunk_count": chunk_count,
             "metrics_count": metrics_count,
             "message": f"Successfully processed and indexed {chunk_count} semantic blocks and {metrics_count} analytical metrics."

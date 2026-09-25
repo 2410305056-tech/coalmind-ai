@@ -9,6 +9,8 @@ from backend.config import DB_PATH
 from backend.store.base import BaseStore
 
 class SQLiteStore(BaseStore):
+    engine_name = "sqlite"
+
     def __init__(self, db_path: Optional[Path] = None):
         self.db_path = str(db_path or DB_PATH)
         self._init_db()

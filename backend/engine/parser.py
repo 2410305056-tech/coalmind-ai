@@ -179,13 +179,19 @@ def _process_dataframe(df: pd.DataFrame, doc_id: str, filename: str) -> Tuple[Li
     
     col_map = {}
     for col in df.columns:
-        c_low = str(col).lower()
+        c_low = str(col).lower().strip()
         if "mine" in c_low:
             col_map["mine"] = col
         elif "sub" in c_low or "company" in c_low:
             col_map["subsidiary"] = col
         elif "year" in c_low or "period" in c_low:
             col_map["year"] = col
+        elif "param" in c_low:
+            col_map["parameter"] = col
+        elif c_low in ("value", "val", "qty", "quantity", "amount"):
+            col_map["value"] = col
+        elif "unit" in c_low:
+            col_map["unit"] = col
         elif "prod" in c_low or "output" in c_low:
             col_map["production"] = col
         elif "obr" in c_low or "overburden" in c_low:
@@ -193,10 +199,20 @@ def _process_dataframe(df: pd.DataFrame, doc_id: str, filename: str) -> Tuple[Li
         elif "strip" in c_low:
             col_map["strip"] = col
 
+    def cell(row, key, default=""):
+        col = col_map.get(key)
+        if col is None:
+            return default
+        val = row.get(col)
+        if val is None or (isinstance(val, float) and pd.isna(val)) or pd.isna(val):
+            return default
+        text = str(val).strip()
+        return default if text.lower() in ("", "nan", "none") else text
+
     for idx, row in df.iterrows():
-        mine = str(row.get(col_map.get("mine", "Mine"), "Gevra")).strip()
-        sub = str(row.get(col_map.get("subsidiary", "Subsidiary"), "SECL")).strip()
-        year = str(row.get(col_map.get("year", "Year"), "2023-24")).strip()
+        mine = cell(row, "mine", "Gevra")
+        sub = cell(row, "subsidiary", "SECL")
+        year = cell(row, "year", "2023-24")
         
         row_str = f"Mine: {mine} | Subsidiary: {sub} | Financial Year: {year} | "
         for k, v in row.items():
@@ -213,6 +229,24 @@ def _process_dataframe(df: pd.DataFrame, doc_id: str, filename: str) -> Tuple[Li
             "bounding_box": [60.0, float(y_offset), 540.0, float(y_offset + 30.0)],
             "embedding": emb
         })
+
+        if "parameter" in col_map and "value" in col_map:
+            try:
+                raw = row.get(col_map["value"])
+                if pd.notna(raw):
+                    metrics.append({
+                        "document_id": doc_id,
+                        "subsidiary": sub,
+                        "mine": mine,
+                        "year": year,
+                        "parameter": cell(row, "parameter", "Coal Production"),
+                        "value": float(str(raw).replace(",", "")),
+                        "unit": cell(row, "unit", "MT"),
+                        "page_number": 1,
+                        "source_doc": filename,
+                    })
+            except Exception:
+                pass
 
         if "production" in col_map and pd.notna(row.get(col_map["production"])):
             try:
