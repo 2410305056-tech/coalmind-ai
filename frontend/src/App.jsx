@@ -4,7 +4,7 @@ import {
 } from 'lucide-react'
 import ProofModal from './components/ProofModal'
 import AnalyticsChart from './components/AnalyticsChart'
-import { apiUrl, getJson, postJson } from './lib/api'
+import { apiUrl, getJson, postJson, pythonApiEnabled } from './lib/api'
 
 const SUGGESTIONS = [
   'Compare coal production between 2022 and 2024',
@@ -144,6 +144,7 @@ export default function App() {
     docFilter === 'all' ? true : d.file_type?.toLowerCase() === docFilter
   )
   const online = health.status === 'ok'
+  const pythonOn = health.python_ok !== false && pythonApiEnabled()
 
   return (
     <div className="shell">
@@ -186,8 +187,13 @@ export default function App() {
       <main className="main">
         {!online && (
           <div className="offline">
-            The interface is live. The Python API is not reachable from this host yet —
-            upload, search, and PDFs need the FastAPI backend.
+            Cannot reach FastAPI or Supabase. Check the network and keys.
+          </div>
+        )}
+        {online && health.python_ok === false && (
+          <div className="offline">
+            Live demo via Supabase (free). Ask, library, and conflicts work.
+            Upload and PDF briefs need the local Python API.
           </div>
         )}
 
@@ -288,7 +294,11 @@ export default function App() {
           <section>
             <div className="page-title">
               <h2>Documents</h2>
-              <p>PDF, Excel, and CSV up to 25 MB. Text, tables, and metrics are indexed together.</p>
+              <p>
+                {pythonOn
+                  ? 'PDF, Excel, and CSV up to 25 MB. Text, tables, and metrics are indexed together.'
+                  : 'This hosted demo is read-only. Run the local API to ingest new files.'}
+              </p>
             </div>
             <div className="card drop">
               <h3>Add a report</h3>
